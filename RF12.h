@@ -8,7 +8,7 @@
 
 // Modify the RF12 driver in such a way that it can inter-operate with RFM69
 // modules running in "native" mode. This affects packet layout and some more.
-#define RF12_COMPAT 0
+#define RF12_COMPAT 1
 
 #include <stdint.h>
 
@@ -148,6 +148,8 @@ void rf12_setRawRecvMode(uint8_t fixed_pkt_len);
 /// Low-level control of the RFM12B via direct register access.
 /// http://tools.jeelabs.org/rfm12b is useful for calculating these.
 uint16_t rf12_control(uint16_t cmd);
+
+inline void maybeInterrupts();
 
 /// See http://blog.strobotics.com.au/2009/07/27/rfm12-tutorial-part-3a/
 /// Transmissions are packetized, don't assume you can sustain these speeds!

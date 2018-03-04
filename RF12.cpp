@@ -12,6 +12,7 @@
 #else
 #include <WProgram.h> // Arduino 0022
 #endif
+#include <SPI.h>
 
 #if RF12_COMPAT
 #define rf12_rawlen     rf12_buf[1]
@@ -176,6 +177,16 @@ const uint8_t whitening[] = {
 };
 #endif
 
+static uint8_t _SPCR;
+static uint8_t _SPSR;
+static uint8_t _SREG;
+
+static volatile bool _inISR = false;
+
+#ifdef SPI_HAS_TRANSACTION
+    SPISettings _settings;
+#endif
+
 // function to set chip select pin from within sketch
 void rf12_set_cs (uint8_t pin) {
 #if defined(__AVR_ATmega32U4__) //Arduino Leonardo
@@ -190,7 +201,13 @@ void rf12_set_cs (uint8_t pin) {
 void rf12_spiInit () {
     bitSet(SS_PORT, cs_pin);
     bitSet(SS_DDR, cs_pin);
-    digitalWrite(SPI_SS, 1);
+	SPI.begin();
+#ifdef OPTIMIZE_SPI	
+	_settings = SPISettings(8000000, MSBFIRST, SPI_MODE0);
+#else
+	_settings = SPISettings(4000000, MSBFIRST, SPI_MODE0);
+#endif	
+/*    digitalWrite(SPI_SS, 1);
     pinMode(SPI_SS, OUTPUT);
     pinMode(SPI_MOSI, OUTPUT);
     pinMode(SPI_MISO, INPUT);
@@ -205,8 +222,46 @@ void rf12_spiInit () {
     // ATtiny
     USICR = bit(USIWM0);
 #endif
+*/
     pinMode(RFM_IRQ, INPUT);
     digitalWrite(RFM_IRQ, 1); // pull-up
+}
+
+/// @details
+/// Select the Transceiver
+void rf12_select() {
+#ifndef SPI_HAS_TRANSACTION
+	_SREG = SREG
+	noInterrupts();
+#endif
+#ifdef SPCR
+	// Save Current SPI Settings
+	_SPCR = SPCR;
+	_SPSR = SPSR;
+#endif
+#ifdef SPI_HAS_TRANSACTION
+	SPI.beginTransaction(_settings);
+#else
+	//Handle non transaction SPI libary here
+#endif
+	bitClear(SS_PORT, cs_pin);
+}
+
+/// @details
+/// deselect the Transceiver
+void rf12_unselect() {
+	bitSet(SS_PORT, cs_pin);
+#ifdef SPI_HAS_TRANSACTION
+	SPI.endTransaction();
+#else
+	SREG =_SREG
+#endif
+#ifdef SPCR
+	// Restore previous SPI Settings
+	SPCR = _SPCR;
+	SPSR = _SPSR;
+#endif
+	maybeInterrupts();
 }
 
 static uint8_t rf12_byte (uint8_t out) {
@@ -243,20 +298,25 @@ static uint8_t rf12_byte (uint8_t out) {
 
 static uint16_t rf12_xferSlow (uint16_t cmd) {
     // slow down to under 2.5 MHz
-#ifdef SPCR
+/*#ifdef SPCR
 	#if F_CPU > 10000000
     bitSet(SPCR, SPR0);
 	#endif
 #endif
+
     bitClear(SS_PORT, cs_pin);
+*/
+	rf12_select();	
     uint16_t reply = rf12_byte(cmd >> 8) << 8;
     reply |= rf12_byte(cmd);
-    bitSet(SS_PORT, cs_pin);
+	rf12_unselect();
+/*    bitSet(SS_PORT, cs_pin);
 #ifdef SPCR
 	#if F_CPU > 10000000
     bitClear(SPCR, SPR0);
 	#endif
 #endif
+*/
     return reply;
 }
 
@@ -318,6 +378,7 @@ uint16_t rf12_control(uint16_t cmd) {
 }
 
 static void rf12_interrupt () {
+	_inISR = true;
     // a transfer of 2x 16 bits @ 2 MHz over SPI takes 2x 8 us inside this ISR
     // correction: now takes 2 + 8 µs, since sending can be done at 8 MHz
     rf12_xfer(0x0000);
@@ -371,6 +432,7 @@ static void rf12_interrupt () {
 
         rf12_xfer(RF_TXREG_WRITE + out);
     }
+	_inISR = false;
 }
 
 #if PINCHG_IRQ
@@ -1045,3 +1107,9 @@ void rf12_encrypt (const uint8_t* key) {
     } else
         crypter = 0;
 }
+
+inline void maybeInterrupts()
+ {
+   // Only reenable interrupts if we're not being called from the ISR
+   if (!_inISR) interrupts();
+ }
